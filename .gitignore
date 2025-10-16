@@ -1,0 +1,17 @@
+# Fichiers de travail des stagiaires
+*/manifests/*.yaml
+!*/manifests/.gitkeep
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+
+# Fichiers IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Fichiers temporaires
+*.tmp
+*.log
