@@ -174,6 +174,7 @@ kubectl logs app-with-config
 
 # Vérifier les variables dans le Pod
 kubectl exec app-with-config -- env | grep APP
+
 ```
 
 **Étape 4 : Injecter toutes les clés d'un coup (envFrom)**
