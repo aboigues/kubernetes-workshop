@@ -10,7 +10,7 @@
 
 ## Concepts clés
 
-### éparer la configuration ?
+### Pourquoi séparer la configuration ?
 
 **Principe des 12 facteurs :**
 - Le code est identique dans tous les environnements
@@ -33,7 +33,7 @@ containers:
 ```yaml
 containers:
 - name: app
-  image: monapp:v1  # Mêmge partout
+  image: monapp:v1  # Même image partout
   env:
   - name: DATABASE_HOST
     valueFrom:
@@ -60,7 +60,7 @@ containers:
 
 ---
 
-## Exercice 1 er ConfigMap
+## Exercice 1 - Créer et utiliser un ConfigMap
 
 ### Objectif
 Créer un ConfigMap et l'utiliser dans un Pod via des variables d'environnement.
@@ -85,7 +85,8 @@ data:
   
   # Peut aussi contenir des fichiers entiers
   app.properties: |
-    database.pool.size=cache.enabled=true
+    database.pool.size=10
+    cache.enabled=true
     cache.ttl=300
     feature.new_ui=true
 ```
@@ -107,7 +108,8 @@ kubectl describe configmap app-config
 **Étape 2 : Créer un ConfigMap en ligne de commande**
 
 ```bash
-# Depuis des valeurs littéralestl create configmap db-config \
+# Depuis des valeurs littérales
+kubectl create configmap db-config \
   --from-literal=host=postgres-service \
   --from-literal=port=5432 \
   --from-literal=database=mydb
@@ -126,7 +128,7 @@ kubectl create configmap dir-config --from-file=configs/
 kubectl get configmap file-config -o yaml
 ```
 
-**Étape : Utiliser le ConfigMap dans un Pod (variables d'env)**
+**Étape 3 : Utiliser le ConfigMap dans un Pod (variables d'env)**
 
 Créez `manifests/pod-with-configmap.yaml` :
 
@@ -149,7 +151,7 @@ spec:
           key: APP_NAME
     
     # Injecter une autre clé
-    ame: APP_ENV
+    - name: APP_ENV
       valueFrom:
         configMapKeyRef:
           name: app-config
@@ -171,7 +173,8 @@ kubectl logs app-with-config
 # Output: App: MonApplication, Env: production, Log: info
 
 # Vérifier les variables dans le Pod
-kubectl exec app-with-config -- env | grep A```
+kubectl exec app-with-config -- env | grep APP
+```
 
 **Étape 4 : Injecter toutes les clés d'un coup (envFrom)**
 
@@ -195,7 +198,7 @@ spec:
 
 ```bash
 kubectl apply -f manifests/pod-with-configmap-all.yaml
-kubectl exec app-with-all-confi env | sort
+kubectl exec app-with-all-config -- env | sort
 ```
 
 **Vous verrez APP_NAME, APP_ENV, LOG_LEVEL, MAX_CONNECTIONS, etc.**
@@ -215,7 +218,7 @@ Certaines applications lisent leur configuration depuis des fichiers (nginx.conf
 
 ### Instructions détaillées
 
-**Étape 1 :un ConfigMap avec un fichier de config nginx**
+**Étape 1 : Créer un ConfigMap avec un fichier de config nginx**
 
 Créez `manifests/nginx-configmap.yaml` :
 
@@ -239,7 +242,7 @@ data:
         }
         location /health {
           return 200 'OK\n';
-          add_heer Content-Type text/plain;
+          add_header Content-Type text/plain;
         }
       }
     }
@@ -308,10 +311,11 @@ kubectl get pod nginx-configured
 # Tester la config
 kubectl exec nginx-configured -- cat /etc/nginx/nginx.conf
 
-# Tester le servectl run test --image=busybox --rm -it --restart=Never -- wget -qO- nginx-configured
+# Tester le serveur
+kubectl run test --image=busybox --rm -it --restart=Never -- wget -qO- http://nginx-configured
 # Output: Hello from ConfigMap!
 
-kubectl run test --image=busybox --rm -it --restart=Never -- wget -qO- nginx-configured/health
+kubectl run test --image=busybox --rm -it --restart=Never -- wget -qO- http://nginx-configured/health
 # Output: OK
 ```
 
@@ -328,7 +332,7 @@ spec:
     image: busybox
     command: ['sh', '-c', 'ls -la /config/ && cat /config/* && sleep 3600']
     volumeMounts:
-    - ame: config-volume
+    - name: config-volume
       mountPath: /config  # Tout le ConfigMap dans /config/
   
   volumes:
@@ -351,7 +355,8 @@ Gérer des données sensibles avec Secrets.
 ### Contexte
 Les Secrets sont similaires aux ConfigMaps mais :
 - Encodés en base64
-- Peuvent être chiffrés au repos (selon la config du cluster)ès contrôlé par RBAC
+- Peuvent être chiffrés au repos (selon la config du cluster)
+- Accès contrôlé par RBAC
 - Ne sont pas affichés en clair dans `kubectl describe`
 
 ### Instructions détaillées
@@ -371,7 +376,7 @@ data:
   username: YWRtaW4=              # "admin" en base64
   password: TW9uU3VwZXJNb3REZVBhc3Nl  # "MonSuperMotDePasse" en base64
 stringData:
-  # Ou utiliser strencoder automatiquement
+  # Ou utiliser stringData pour encoder automatiquement
   connection-string: "postgresql://admin:MonSuperMotDePasse@db-service:5432/mydb"
 ```
 
@@ -391,7 +396,7 @@ echo -n "MonSuperMotDePasse" | base64
 ```bash
 kubectl apply -f manifests/db-secret.yaml
 
-# Voir le Secret (valeurs masqées)
+# Voir le Secret (valeurs masquées)
 kubectl describe secret db-credentials
 
 # Voir les données (encodées)
@@ -411,7 +416,7 @@ kubectl create secret generic api-key \
 
 # Depuis un fichier (clé SSH, certificat, etc.)
 echo "ma-cle-secrete" > api.key
-kubete secret generic app-secret --from-file=api.key
+kubectl create secret generic app-secret --from-file=api.key
 
 # Voir le résultat
 kubectl get secret api-key -o yaml
@@ -436,7 +441,7 @@ spec:
       valueFrom:
         secretKeyRef:
           name: db-credentials
-          key: uname
+          key: username
     
     - name: POSTGRES_PASSWORD
       valueFrom:
@@ -458,7 +463,7 @@ kubectl apply -f manifests/pod-with-secret.yaml
 kubectl exec app-with-secrets -- env | grep POSTGRES_USER
 # Output: POSTGRES_USER=admin
 
-# ATTENTION : Ne jamais lor les secrets !
+# ATTENTION : Ne jamais logger les secrets !
 kubectl logs app-with-secrets
 ```
 
@@ -482,7 +487,7 @@ spec:
       readOnly: true  # Toujours en lecture seule !
   
   volumes:
-  - name: secrevolume
+  - name: secret-volume
     secret:
       secretName: db-credentials
       defaultMode: 0400  # Permissions restrictives
@@ -505,7 +510,7 @@ kubectl exec app-with-secret-file -- cat /secrets/username
 
 ## Exercice 4 - Application complète avec ConfigMap et Secret
 
-### Obf
+### Objectif
 Créer une application web qui utilise à la fois ConfigMaps et Secrets.
 
 ### Instructions détaillées
@@ -530,7 +535,8 @@ data:
   app-settings.json: |
     {
       "features": {
-        "newUI":        "analytics": true,
+        "newUI": true,
+        "analytics": true,
         "debugMode": false
       },
       "limits": {
@@ -554,7 +560,7 @@ stringData:
     {
       "database": {
         "host": "db-service",
-        "port": 542,
+        "port": 5432,
         "username": "webapp_user",
         "password": "SuperSecretPassword123"
       },
@@ -622,7 +628,7 @@ spec:
         volumeMounts:
         # ConfigMap comme fichiers
         - name: config-volume
-          mountPah: /etc/config
+          mountPath: /etc/config
           readOnly: true
         
         # Secret comme fichiers
@@ -672,7 +678,7 @@ kubectl get pods -l app=webapp
 POD_NAME=$(kubectl get pods -l app=webapp -o jsonpath='{.items[0].metadata.name}')
 
 # Variables d'environnement
-kubl exec $POD_NAME -- env | grep -E 'APP_|DB_|API_'
+kubectl exec $POD_NAME -- env | grep -E 'APP_|DB_|API_'
 
 # Fichiers de configuration
 kubectl exec $POD_NAME -- ls -la /etc/config/
@@ -687,7 +693,10 @@ kubectl exec $POD_NAME -- cat /etc/secrets/credentials.json
 
 ```bash
 # Accéder à l'application
-minikube service webapp-service
+minikube service webapp-service --url
+
+# Ou utiliser curl
+curl $(minikube service webapp-service --url)
 ```
 
 ---
@@ -695,12 +704,12 @@ minikube service webapp-service
 ## Exercice 5 - Mise à jour de configuration
 
 ### Objectif
-Comprendre comment me à jour la configuration sans redéployer les Pods.
+Comprendre comment mettre à jour la configuration sans redéployer les Pods.
 
 ### Contexte
 Quand vous modifiez un ConfigMap ou Secret :
 - Variables d'env : **NON mises à jour** (Pod doit redémarrer)
-- Fichiers montés : **Mises à jour automatiquement** (après ~60s)
+- Fichiers montés : **Mises à jour automatiquement** (propagation sous quelques instants)
 
 ### Instructions détaillées
 
@@ -716,7 +725,8 @@ metadata:
 data:
   config.txt: "Version 1.0"
   settings.properties: |
-    version=ure.enabled=false
+    version=1.0
+    feature.enabled=false
 ---
 apiVersion: v1
 kind: Pod
@@ -769,8 +779,9 @@ kubectl edit configmap update-test
 # Continuer à observer les logs
 kubectl logs config-reader -f
 
-# Après 30-60 secondes, vous verrez :
-# Version 2.0 ed!
+# Les fichiers montés sont mis à jour automatiquement
+# Vous verrez :
+# Version 2.0 - Updated!
 # feature.enabled=true
 ```
 
@@ -788,7 +799,7 @@ kubectl rollout restart deployment webapp
 kubectl delete pod -l app=webapp
 
 # Méthode 3 : Modifier une annotation (force une mise à jour)
-kubectl patch depl-p \
+kubectl patch deployment webapp -p \
   '{"spec":{"template":{"metadata":{"annotations":{"configmap-version":"v2"}}}}}'
 ```
 
@@ -821,7 +832,8 @@ type: kubernetes.io/dockerconfigjson
 type: kubernetes.io/tls
 ```
 
-**5. SSH Authyaml
+**5. SSH Auth**
+```yaml
 type: kubernetes.io/ssh-auth
 ```
 
@@ -849,7 +861,7 @@ kubectl create secret tls myapp-tls \
 kubectl get secret myapp-tls -o yaml
 ```
 
-**Utilisation dans un s :**
+**Utilisation dans un Ingress :**
 ```yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -877,7 +889,7 @@ spec:
 
 ```bash
 # Pour pull des images depuis un registry privé
-kubectl create secret doc-registry regcred \
+kubectl create secret docker-registry regcred \
   --docker-server=https://index.docker.io/v1/ \
   --docker-username=myuser \
   --docker-password=mypassword \
@@ -901,11 +913,13 @@ spec:
 **Secret Basic Auth**
 
 ```bash
-# Créer un fichier .htpasswd
+# Créer un fichier htpasswd (nécessite apache2-utils ou httpd-tools)
+# Sur AlmaLinux :
+sudo dnf install -y httpd-tools
 htpasswd -c auth myuser
 # Entrer le mot de passe
 
-# CrÃe Secret
+# Créer le Secret
 kubectl create secret generic basic-auth --from-file=auth
 ```
 
@@ -927,7 +941,7 @@ echo "credentials.json" >> .gitignore
 
 - **Sealed Secrets** : Chiffrer les secrets pour Git
 - **External Secrets Operator** : Synchroniser depuis un vault externe
-- **HashiCorp Vault** : Gestionnaire de secrets centrisé
+- **HashiCorp Vault** : Gestionnaire de secrets centralisé
 
 **3. Limiter l'accès avec RBAC**
 
@@ -954,7 +968,7 @@ Dans la configuration du cluster (kube-apiserver) :
 
 ```bash
 # Créer un nouveau secret
-kubectl creecret generic db-credentials-v2 --from-literal=password=NewPassword
+kubectl create secret generic db-credentials-v2 --from-literal=password=NewPassword
 
 # Mettre à jour les Deployments
 kubectl set env deployment/webapp --from=secret/db-credentials-v2
@@ -981,7 +995,7 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
- name: app-config
+  name: app-config
 data:
   LOG_LEVEL: "warn"
   DATABASE_HOST: "prod-db"
@@ -1008,7 +1022,7 @@ metadata:
 ```bash
 # Créer
 kubectl create configmap <name> --from-literal=key=value
-kubectl create confip <name> --from-file=file.txt
+kubectl create configmap <name> --from-file=file.txt
 kubectl apply -f configmap.yaml
 
 # Lister
@@ -1034,7 +1048,9 @@ kubectl create secret tls <name> --cert=cert.crt --key=key.key
 kubectl apply -f secret.yaml
 
 # Lister
-kubectl get secrets# Voir (masqué)
+kubectl get secrets
+
+# Voir (masqué)
 kubectl describe secret <name>
 
 # Voir les données
@@ -1058,7 +1074,7 @@ kubectl exec <pod> -- ls -la /config/
 kubectl exec <pod> -- cat /config/file.txt
 
 # Voir les événements
-kubectl get events --soetadata.creationTimestamp
+kubectl get events --sort-by=.metadata.creationTimestamp
 
 # Logs
 kubectl logs <pod> | grep CONFIG
@@ -1073,7 +1089,7 @@ kubectl logs <pod> | grep CONFIG
 3. **Variables vs fichiers** : Variables = statiques, Fichiers = peuvent être mis à jour
 4. **Montages avec subPath** : Remplacer un fichier sans écraser tout le dossier
 5. **Jamais de secrets dans Git** : Utiliser des outils de gestion dédiés
-6pour l'accès** : Limiter qui peut lire les secrets
+6. **RBAC pour l'accès** : Limiter qui peut lire les secrets
 
 ---
 
@@ -1099,7 +1115,7 @@ kubectl describe pod <pod-name>
 kubectl get secret <secret-name>
 
 # Vérifier les permissions
-kubectl auth secret/<secret-name>
+kubectl auth can-i get secret/<secret-name>
 ```
 
 ### Mise à jour non prise en compte
@@ -1107,18 +1123,640 @@ kubectl auth secret/<secret-name>
 # Pour les variables d'env : redémarrer les Pods
 kubectl rollout restart deployment/<name>
 
-# Pour les volumes : attendre ~60s ou forcer
-kubectl delete pod <pod-name>
+# Pour les volumes : la mise à jour est automatique
+# mais peut prendre quelques instants
+```
+
+---
+
+## Nettoyage
+
+```bash
+# Supprimer tous les exercices
+kubectl delete -f manifests/config-update-test.yaml
+kubectl delete -f manifests/complete-app.yaml
+kubectl delete -f manifests/pod-with-secret-file.yaml
+kubectl delete -f manifests/pod-with-secret.yaml
+kubectl delete -f manifests/nginx-with-configmap-volume.yaml
+kubectl delete -f manifests/pod-with-configmap-all.yaml
+kubectl delete -f manifests/pod-with-configmap.yaml
+kubectl delete pod app-with-config-dir --ignore-not-found
+
+# Supprimer les ConfigMaps
+kubectl delete configmap app-config
+kubectl delete configmap nginx-config
+kubectl delete configmap db-config
+kubectl delete configmap file-config
+kubectl delete configmap dir-config
+kubectl delete configmap update-test
+kubectl delete configmap webapp-config
+
+# Supprimer les Secrets
+kubectl delete secret db-credentials
+kubectl delete secret api-key
+kubectl delete secret app-secret
+kubectl delete secret webapp-secret
+kubectl delete secret myapp-tls --ignore-not-found
+kubectl delete secret regcred --ignore-not-found
+kubectl delete secret basic-auth --ignore-not-found
+
+# Nettoyer les fichiers temporaires
+rm -f config.txt api.key tls.key tls.crt auth
+rm -rf configs/
+
+# Vérifier qu'il ne reste rien
+kubectl get configmaps
+kubectl get secrets
+kubectl get pods
 ```
 
 ---
 
 ## Pour aller plus loin
 
-### Prochaine étape
-Dans le TP05, vous apprendrez à gérer la **persistance des données** avec les Volumes.
+### Outils avancés
 
-### Ressources
+**1. Kustomize**
+
+Kustomize est intégré à kubectl et permet de gérer plusieurs environnements :
+
+```bash
+# Structure d'un projet avec Kustomize
+project/
+├── base/
+│   ├── kustomization.yaml
+│   ├── deployment.yaml
+│   └── configmap.yaml
+└── overlays/
+    ├── dev/
+    │   ├── kustomization.yaml
+    │   └── configmap.yaml
+    └── prod/
+        ├── kustomization.yaml
+        └── configmap.yaml
+
+# Déployer pour dev
+kubectl apply -k overlays/dev/
+
+# Déployer pour prod
+kubectl apply -k overlays/prod/
+```
+
+**2. Helm**
+
+Helm est un gestionnaire de packages pour Kubernetes :
+
+```bash
+# Installer Helm
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# Exemple de values.yaml
+config:
+  appName: "MyApp"
+  logLevel: "info"
+
+secrets:
+  dbPassword: "changeme"
+
+# Installer avec Helm
+helm install myapp ./mychart --values values-prod.yaml
+```
+
+**3. Sealed Secrets**
+
+Pour chiffrer les secrets avant de les commiter dans Git :
+
+```bash
+# Installer le contrôleur Sealed Secrets
+kubectl apply -f https://github.com/bitnami-labs/sealed-secrets/releases/download/v0.24.0/controller.yaml
+
+# Installer kubeseal (client)
+wget https://github.com/bitnami-labs/sealed-secrets/releases/download/v0.24.0/kubeseal-0.24.0-linux-amd64.tar.gz
+tar xfz kubeseal-0.24.0-linux-amd64.tar.gz
+sudo install -m 755 kubeseal /usr/local/bin/kubeseal
+
+# Créer un SealedSecret
+kubectl create secret generic mysecret \
+  --from-literal=password=mypassword \
+  --dry-run=client -o yaml | \
+  kubeseal -o yaml > sealed-secret.yaml
+
+# Ce fichier peut être commité dans Git en toute sécurité
+kubectl apply -f sealed-secret.yaml
+```
+
+**4. External Secrets Operator**
+
+Pour synchroniser les secrets depuis un vault externe (AWS Secrets Manager, HashiCorp Vault, etc.) :
+
+```bash
+# Installer External Secrets Operator
+helm repo add external-secrets https://charts.external-secrets.io
+helm install external-secrets external-secrets/external-secrets -n external-secrets-system --create-namespace
+
+# Exemple avec un SecretStore local (pour test)
+apiVersion: external-secrets.io/v1beta1
+kind: SecretStore
+metadata:
+  name: vault-backend
+spec:
+  provider:
+    vault:
+      server: "http://vault.default.svc.cluster.local:8200"
+      path: "secret"
+      version: "v2"
+      auth:
+        tokenSecretRef:
+          name: "vault-token"
+          key: "token"
+```
+
+---
+
+## Cas d'usage avancés
+
+### 1. Configuration par environnement avec Kustomize
+
+Créez une structure de projet :
+
+```bash
+mkdir -p kustomize-example/{base,overlays/{dev,prod}}
+cd kustomize-example
+```
+
+**base/kustomization.yaml :**
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- deployment.yaml
+- service.yaml
+
+configMapGenerator:
+- name: app-config
+  literals:
+  - APP_NAME=MyApp
+  - LOG_LEVEL=info
+```
+
+**base/deployment.yaml :**
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+    spec:
+      containers:
+      - name: app
+        image: nginx:alpine
+        envFrom:
+        - configMapRef:
+            name: app-config
+```
+
+**overlays/dev/kustomization.yaml :**
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+bases:
+- ../../base
+
+configMapGenerator:
+- name: app-config
+  behavior: merge
+  literals:
+  - LOG_LEVEL=debug
+  - APP_ENV=development
+
+replicas:
+- name: myapp
+  count: 1
+```
+
+**overlays/prod/kustomization.yaml :**
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+bases:
+- ../../base
+
+configMapGenerator:
+- name: app-config
+  behavior: merge
+  literals:
+  - LOG_LEVEL=warn
+  - APP_ENV=production
+
+replicas:
+- name: myapp
+  count: 3
+```
+
+**Déploiement :**
+```bash
+# Dev
+kubectl apply -k overlays/dev/
+
+# Prod
+kubectl apply -k overlays/prod/
+
+# Prévisualiser sans appliquer
+kubectl kustomize overlays/prod/
+```
+
+### 2. Injection de secrets dans des applications
+
+**Pour une application Node.js :**
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nodejs-config
+data:
+  NODE_ENV: "production"
+  PORT: "3000"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nodejs-secret
+stringData:
+  DATABASE_URL: "postgresql://user:pass@postgres:5432/db"
+  API_SECRET: "my-secret-key"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nodejs-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nodejs
+  template:
+    metadata:
+      labels:
+        app: nodejs
+    spec:
+      containers:
+      - name: app
+        image: node:18-alpine
+        envFrom:
+        - configMapRef:
+            name: nodejs-config
+        - secretRef:
+            name: nodejs-secret
+        ports:
+        - containerPort: 3000
+```
+
+**Pour une application Java Spring Boot :**
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spring-config
+data:
+  application.properties: |
+    server.port=8080
+    spring.application.name=myapp
+    logging.level.root=INFO
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: spring-secret
+stringData:
+  application-secrets.properties: |
+    spring.datasource.url=jdbc:postgresql://postgres:5432/db
+    spring.datasource.username=user
+    spring.datasource.password=secretpass
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spring-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: spring
+  template:
+    metadata:
+      labels:
+        app: spring
+    spec:
+      containers:
+      - name: app
+        image: openjdk:17-jdk-slim
+        volumeMounts:
+        - name: config
+          mountPath: /config
+          readOnly: true
+        env:
+        - name: SPRING_CONFIG_LOCATION
+          value: "file:/config/"
+      volumes:
+      - name: config
+        projected:
+          sources:
+          - configMap:
+              name: spring-config
+          - secret:
+              name: spring-secret
+```
+
+### 3. Configuration dynamique avec un ConfigMap monté
+
+Pour des applications qui rechargent automatiquement leur configuration :
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dynamic-config
+data:
+  config.json: |
+    {
+      "refreshInterval": 10,
+      "features": {
+        "featureA": true,
+        "featureB": false
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dynamic-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dynamic
+  template:
+    metadata:
+      labels:
+        app: dynamic
+      annotations:
+        # Cette annotation change à chaque modification du ConfigMap
+        # forçant un rollout si nécessaire
+        configmap/checksum: "{{ checksum }}"
+    spec:
+      containers:
+      - name: app
+        image: busybox
+        command:
+        - sh
+        - -c
+        - |
+          while true; do
+            echo "Reading config at $(date)"
+            cat /config/config.json
+            sleep 10
+          done
+        volumeMounts:
+        - name: config
+          mountPath: /config
+      volumes:
+      - name: config
+        configMap:
+          name: dynamic-config
+```
+
+---
+
+## Exercices pratiques supplémentaires
+
+### Exercice bonus 1 : Application multi-tiers
+
+Créez une stack complète WordPress + MySQL avec configuration séparée :
+
+```yaml
+# mysql-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-config
+data:
+  MYSQL_DATABASE: wordpress
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-secret
+stringData:
+  MYSQL_ROOT_PASSWORD: rootpassword
+  MYSQL_PASSWORD: wordpresspassword
+  MYSQL_USER: wordpress
+---
+# wordpress-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wordpress-config
+data:
+  WORDPRESS_DB_HOST: mysql
+  WORDPRESS_DB_NAME: wordpress
+  WORDPRESS_DB_USER: wordpress
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wordpress-secret
+stringData:
+  WORDPRESS_DB_PASSWORD: wordpresspassword
+```
+
+**Défi :** Déployez cette stack et testez que WordPress fonctionne avec la configuration injectée.
+
+### Exercice bonus 2 : Rotation de secrets
+
+Simulez une rotation de mot de passe de base de données :
+
+1. Créez un secret v1
+2. Déployez une application qui l'utilise
+3. Créez un secret v2 avec un nouveau mot de passe
+4. Mettez à jour l'application pour utiliser v2
+5. Vérifiez qu'il n'y a pas d'interruption de service
+
+### Exercice bonus 3 : Configuration par fichier
+
+Créez une application nginx avec :
+- Configuration nginx personnalisée
+- Pages HTML depuis ConfigMap
+- Certificats TLS depuis Secret
+- Variables d'environnement pour le logging
+
+---
+
+## Quiz de compréhension
+
+Testez vos connaissances :
+
+**Question 1 :** Quelle est la différence entre `data` et `stringData` dans un Secret ?
+- a) data est en base64, stringData en clair (encodage auto)
+- b) Aucune différence
+- c) stringData est plus sécurisé
+- d) data est pour les fichiers, stringData pour les variables
+
+**Question 2 :** Comment mettre à jour une variable d'environnement issue d'un ConfigMap sans modifier le YAML du Deployment ?
+- a) kubectl edit configmap et attendre
+- b) kubectl edit configmap puis kubectl rollout restart
+- c) Impossible, il faut modifier le Deployment
+- d) La mise à jour est automatique
+
+**Question 3 :** Que fait `subPath` dans un volumeMount ?
+- a) Monte un sous-dossier du volume
+- b) Monte un fichier spécifique sans écraser le dossier parent
+- c) Crée un sous-chemin dans le conteneur
+- d) Définit le chemin relatif du volume
+
+**Question 4 :** Les Secrets Kubernetes sont-ils chiffrés par défaut ?
+- a) Oui, toujours
+- b) Non, seulement encodés en base64
+- c) Oui, mais seulement en transit
+- d) Dépend de la configuration du cluster
+
+**Question 5 :** Comment injecter toutes les clés d'un ConfigMap comme variables d'environnement ?
+- a) env: avec configMapKeyRef pour chaque clé
+- b) envFrom: avec configMapRef
+- c) volumes: avec configMap
+- d) Impossible, il faut les lister une par une
+
+**Réponses :**
+1. a) data nécessite encodage base64 manuel, stringData encode automatiquement
+2. b) Modifier le ConfigMap puis forcer un redémarrage avec rollout restart
+3. b) Monte un fichier spécifique du volume sans remplacer tout le dossier
+4. d) Par défaut non (juste base64), mais peut être activé via encryption-provider-config
+5. b) envFrom avec configMapRef injecte toutes les clés d'un coup
+
+---
+
+## Antisèches (Cheat Sheet)
+
+### Création rapide
+
+```bash
+# ConfigMap depuis littéraux
+kubectl create cm myconfig --from-literal=key=value
+
+# ConfigMap depuis fichier
+kubectl create cm myconfig --from-file=config.txt
+
+# Secret depuis littéraux
+kubectl create secret generic mysecret --from-literal=password=pass
+
+# Secret TLS
+kubectl create secret tls mytls --cert=tls.crt --key=tls.key
+
+# Secret Docker
+kubectl create secret docker-registry regcred \
+  --docker-server=registry.io \
+  --docker-username=user \
+  --docker-password=pass
+```
+
+### Inspection
+
+```bash
+# Voir un ConfigMap
+kubectl get cm myconfig -o yaml
+
+# Décoder un Secret
+kubectl get secret mysecret -o jsonpath='{.data.password}' | base64 -d
+
+# Voir tous les Secrets (masqués)
+kubectl get secrets
+
+# Décrire (valeurs masquées pour secrets)
+kubectl describe cm myconfig
+kubectl describe secret mysecret
+```
+
+### Utilisation dans les Pods
+
+```bash
+# Variable depuis ConfigMap
+env:
+- name: KEY
+  valueFrom:
+    configMapKeyRef:
+      name: myconfig
+      key: key
+
+# Toutes les clés
+envFrom:
+- configMapRef:
+    name: myconfig
+
+# Volume depuis ConfigMap
+volumes:
+- name: config
+  configMap:
+    name: myconfig
+
+# Montage
+volumeMounts:
+- name: config
+  mountPath: /config
+  subPath: file.txt  # Pour un seul fichier
+```
+
+### Mise à jour
+
+```bash
+# Éditer
+kubectl edit cm myconfig
+
+# Patcher
+kubectl patch cm myconfig -p '{"data":{"key":"newvalue"}}'
+
+# Remplacer
+kubectl create cm myconfig --from-literal=key=newvalue \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# Forcer le redémarrage
+kubectl rollout restart deployment myapp
+```
+
+---
+
+## Ressources complémentaires
+
+### Documentation officielle
 - ConfigMaps : https://kubernetes.io/docs/concepts/configuration/configmap/
-- Secrets : https://kubernetes.io/dncepts/configuration/secret/
-- Best practices : https://kubernetes.io/docs/concepts/configuration/secret/#best-practices
+- Secrets : https://kubernetes.io/docs/concepts/configuration/secret/
+- Bonnes pratiques : https://kubernetes.io/docs/concepts/configuration/secret/#best-practices
+- Kustomize : https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/
+
+### Outils
+- Sealed Secrets : https://github.com/bitnami-labs/sealed-secrets
+- External Secrets : https://external-secrets.io/
+- Helm : https://helm.sh/
+- Kustomize : https://kustomize.io/
+
+### Articles et tutoriels
+- 12 Factor App : https://12factor.net/config
+- Kubernetes Patterns : https://k8spatterns.io/
+
+---
+
+## Prochaine étape
+
+Dans le TP05, vous découvrirez la **gestion des volumes et de la persistance** pour stocker des données au-delà du cycle de vie des Pods.
+
