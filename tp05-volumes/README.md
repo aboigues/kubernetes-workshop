@@ -142,12 +142,17 @@ volumes:
 Monter un répertoire du nœud dans un Pod.
 
 ### Contexte
-hostPath permet d'accéder au système de fichiers du nœud. **Attention** : c'est risqué en production !
+hostPath permet d'accéder au système de fichiers du nœud. Dans un environnement Minikube, cela correspond à la machine virtuelle Minikube elle-même.
 
 **Cas d'usage :**
 - Logs système
-- Configuration Docker (pour DinD)
-- Développement local (Minikube)
+- Développement local
+- Accès à des données de la machine hôte
+
+**Important :** hostPath est utile pour le développement avec Minikube, mais risqué en production car :
+- Les données sont liées à un nœud spécifique
+- Risque de sécurité (accès au système de fichiers)
+- Non portable entre clusters
 
 ### Instructions détaillées
 
@@ -198,8 +203,11 @@ spec:
 ```bash
 kubectl apply -f manifests/hostpath-pod.yaml
 
+# Attendre que le Pod soit prêt
+kubectl wait --for=condition=Ready pod/hostpath-pod
+
 # Tester nginx
-kubectl run test --image=busybox --rm -it --restart=Never -- wget -qO- hostpath-pod
+kubectl run test --image=busybox --rm -it --restart=Never -- wget -qO- http://hostpath-pod
 # Output: Hello from host
 ```
 
@@ -218,7 +226,7 @@ kubectl exec hostpath-pod -- cat /usr/share/nginx/html/hostfile.txt
 
 **Attention avec hostPath :**
 - Lié à un nœud spécifique (si le Pod change de nœud, données différentes)
-- Risque de sécurité (accès au système de fichiers)
+- Dans Minikube, tous les Pods sont sur le même nœud, mais ce ne serait pas le cas dans un cluster multi-nœuds
 - Non portable entre clusters
 
 ---
@@ -251,588 +259,637 @@ spec:
   storageClassName: manual
   capacity:
     storage: 1Gi
-  accessModes:#!/bin/bash
-
-# Script de génération des fichiers pour la formation Kubernetes avec Minikube sur AlmaLinux
-# Version avec explications détaillées pour les participants
-
-set -e
-
-echo "=== Génération de la structure des TPs Kubernetes ==="
-
-# Création de l'arborescence principale
-mkdir -p tp01-premiers-pas/{manifests,corrections}
-mkdir -p tp02-deployments/{manifests,corrections}
-mkdir -p tp03-services/{manifests,corrections}
-mkdir -p tp04-configmaps-secrets/{manifests,corrections}
-mkdir -p tp05-volumes/{manifests,corrections}
-mkdir -p tp06-ingress/{manifests,corrections}
-mkdir -p tp07-namespaces/{manifests,corrections}
-mkdir -p tp08-monitoring/{manifests,corrections}
-mkdir -p ressources/{scripts,docs,exemples}
-
-echo "Structure créée avec succès"
-
-# ===== TP01 - PREMIERS PAS =====
-cat > tp01-premiers-pas/README.md << 'EOF'
-# TP01 - Premiers pas avec Kubernetes
-
-## Objectifs pédagogiques
-À la fin de ce TP, vous serez capable de :
-- Comprendre ce qu'est un Pod et son rôle dans Kubernetes
-- Créer et gérer des Pods à partir de fichiers YAML
-- Observer l'état d'un Pod et consulter ses logs
-- Utiliser les labels pour organiser vos ressources
-
-## Concepts clés
-
-### Qu'est-ce qu'un Pod ?
-Un Pod est la plus petite unité déployable dans Kubernetes. C'est un groupe d'un ou plusieurs conteneurs qui :
-- Partagent le même espace réseau (même IP)
-- Partagent les mêmes volumes de stockage
-- Sont toujours déployés ensemble sur le même nœud
-
-### Structure d'un fichier YAML Kubernetes
-Chaque ressource Kubernetes suit cette structure :
-```yaml
-apiVersion: v1              # Version de l'API Kubernetes
-kind: Pod                   # Type de ressource
-metadata:                   # Métadonnées (nom, labels, etc.)
-  name: mon-pod
-spec:                       # Spécification de la ressource
-  containers:
-  - name: mon-conteneur
-    image: nginx:alpine
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /mnt/pv-data
+    type: DirectoryOrCreate
 ```
 
----
+**Explications des accessModes :**
+- `ReadWriteOnce` (RWO) : Lecture/écriture par un seul nœud
+- `ReadOnlyMany` (ROX) : Lecture seule par plusieurs nœuds
+- `ReadWriteMany` (RWX) : Lecture/écriture par plusieurs nœuds
 
-## Exercice 1 - Votre premier Pod
+**Note sur Minikube :** 
+- Minikube supporte principalement RWO avec hostPath
+- Pour RWX, d'autres solutions comme NFS seraient nécessaires
 
-### Objectif
-Créer un Pod simple contenant un serveur web nginx.
+```bash
+# Créer le PV
+kubectl apply -f manifests/pv.yaml
 
-### Contexte
-Nginx est un serveur web léger, parfait pour débuter. L'image `nginx:alpine` est une version minimale basée sur Alpine Linux.
+# Vérifier le PV
+kubectl get pv
+# STATUS devrait être "Available"
+```
 
-### Instructions détaillées
+**Étape 2 : Créer un PersistentVolumeClaim**
 
-**Étape 1 : Créer le fichier YAML**
+Créez `manifests/pvc.yaml` :
 
-Dans le dossier `manifests/`, créez un fichier `nginx-pod.yaml` avec ce contenu :
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: local-pvc
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 500Mi  # On demande moins que le PV (1Gi)
+```
+
+**Important :** Le PVC demande 500Mi, le PV offre 1Gi. Kubernetes va "binder" le PVC au PV disponible.
+
+```bash
+# Créer le PVC
+kubectl apply -f manifests/pvc.yaml
+
+# Vérifier le binding
+kubectl get pvc
+# STATUS devrait être "Bound"
+
+kubectl get pv
+# Le PV devrait maintenant afficher STATUS "Bound" aussi
+```
+
+**Étape 3 : Utiliser le PVC dans un Pod**
+
+Créez `manifests/pod-with-pvc.yaml` :
 
 ```yaml
 apiVersion: v1
 kind: Pod
 metadata:
-  name: nginx-simple
-  labels:
-    app: nginx
-    env: demo
+  name: nginx-pvc
 spec:
   containers:
   - name: nginx
     image: nginx:alpine
-    ports:
-    - containerPort: 80
+    volumeMounts:
+    - name: storage
+      mountPath: /usr/share/nginx/html
+  
+  volumes:
+  - name: storage
+    persistentVolumeClaim:
+      claimName: local-pvc  # Référence au PVC
 ```
-
-**Explication ligne par ligne :**
-- `apiVersion: v1` : Pour un Pod, on utilise l'API v1
-- `kind: Pod` : On déclare qu'on veut créer un Pod
-- `metadata.name` : Nom unique du Pod dans le namespace
-- `labels` : Étiquettes pour organiser et filtrer les ressources
-- `spec.containers` : Liste des conteneurs dans le Pod
-- `image` : Image Docker à utiliser
-- `ports.containerPort` : Port sur lequel le conteneur écoute
-
-**Étape 2 : Appliquer le manifeste**
 
 ```bash
-# Déployer le Pod
-kubectl apply -f manifests/nginx-pod.yaml
+kubectl apply -f manifests/pod-with-pvc.yaml
 
-# Vérifier que le Pod est créé
-kubectl get pods
+# Créer un fichier dans le volume
+kubectl exec nginx-pvc -- sh -c 'echo "Hello from PVC" > /usr/share/nginx/html/index.html'
+
+# Tester
+kubectl run test --image=busybox --rm -it --restart=Never -- wget -qO- http://nginx-pvc
+# Output: Hello from PVC
 ```
 
-**Ce que vous devriez voir :**
-```
-NAME           READY   STATUS    RESTARTS   AGE
-nginx-simple   1/1     Running   0          10s
-```
-
-**Explication des colonnes :**
-- `READY` : 1/1 signifie 1 conteneur prêt sur 1 total
-- `STATUS` : Running = le Pod fonctionne correctement
-- `RESTARTS` : Nombre de redémarrages (0 = stable)
-- `AGE` : Temps depuis la création
-
-**Étape 3 : Observer le Pod en détail**
-
-```bash
-# Voir tous les détails du Pod
-kubectl describe pod nginx-simple
-```
-
-**Points importants dans la sortie :**
-- **Events** : Historique de ce qui s'est passé (pull image, création conteneur, etc.)
-- **Status** : État actuel du Pod
-- **IP** : Adresse IP interne du Pod
-- **Node** : Sur quel nœud le Pod s'exécute
-
-**Étape 4 : Consulter les logs**
-
-```bash
-# Voir les logs du serveur nginx
-kubectl logs nginx-simple
-
-# Suivre les logs en temps réel
-kubectl logs nginx-simple -f
-```
-
-**Étape 5 : Tester le serveur web**
-
-```bash
-# Créer un Pod temporaire pour tester nginx
-kubectl run test-pod --image=busybox --rm -it --restart=Never -- wget -qO- nginx-simple
-
-# Si cela fonctionne, vous verrez le HTML par défaut de nginx
-```
-
-**Explication de la commande :**
-- `--rm` : Supprimer le Pod après utilisation
-- `-it` : Mode interactif
-- `--restart=Never` : Ne pas recréer le Pod s'il s'arrête
-
-**Étape 6 : Nettoyer**
+**Étape 4 : Tester la persistance**
 
 ```bash
 # Supprimer le Pod
-kubectl delete pod nginx-simple
+kubectl delete pod nginx-pvc
 
-# Ou supprimer via le fichier
-kubectl delete -f manifests/nginx-pod.yaml
+# Recréer le Pod
+kubectl apply -f manifests/pod-with-pvc.yaml
+
+# Vérifier que les données sont toujours là
+kubectl exec nginx-pvc -- cat /usr/share/nginx/html/index.html
+# Output: Hello from PVC
 ```
 
-### Questions de compréhension
-1. Pourquoi le Pod a-t-il besoin de quelques secondes avant d'être "Running" ?
-2. Que signifie un STATUS "ImagePullBackOff" ?
-3. Comment filtrer les Pods ayant le label `app=nginx` ?
+**Les données persistent parce que :**
+- Le PVC reste même quand le Pod est supprimé
+- Le PV (et donc les données) reste tant que le PVC existe
 
-**Réponses :**
-1. Kubernetes doit télécharger l'image, créer le conteneur, puis attendre qu'il soit prêt
-2. Kubernetes n'arrive pas à télécharger l'image (nom incorrect ou réseau)
-3. `kubectl get pods -l app=nginx`
+**Étape 5 : Nettoyer**
+
+```bash
+# Ordre important pour le nettoyage !
+kubectl delete pod nginx-pvc
+kubectl delete pvc local-pvc
+kubectl delete pv local-pv
+
+# Vérifier
+kubectl get pv,pvc
+```
 
 ---
 
-## Exercice 2 - Pod avec plusieurs conteneurs
+## Exercice 4 - StorageClass et provisionnement dynamique
 
 ### Objectif
-Comprendre comment plusieurs conteneurs peuvent cohabiter dans un même Pod et partager des ressources.
+Utiliser le provisionnement dynamique avec la StorageClass de Minikube.
 
 ### Contexte
-Un pattern courant est le "sidecar" : un conteneur secondaire qui aide le conteneur principal. Ici, nous allons créer un Pod où :
-- Le conteneur principal est nginx qui génère des logs
-- Le conteneur sidecar lit ces logs en continu
-
-### Pourquoi plusieurs conteneurs dans un Pod ?
-- Ils partagent la même IP (peuvent communiquer via localhost)
-- Ils partagent les mêmes volumes (échange de fichiers)
-- Ils sont déployés et scalés ensemble
+Avec le provisionnement dynamique, vous n'avez plus besoin de créer manuellement les PV. La StorageClass crée automatiquement un PV quand vous créez un PVC.
 
 ### Instructions détaillées
 
-**Étape 1 : Créer le fichier YAML**
+**Étape 1 : Vérifier la StorageClass par défaut**
 
-Créez `manifests/pod-multi-containers.yaml` :
+```bash
+# Lister les StorageClass disponibles
+kubectl get storageclass
+
+# Voir les détails de la StorageClass standard
+kubectl describe storageclass standard
+```
+
+**Sur Minikube, vous devriez voir :**
+- `standard` : StorageClass par défaut utilisant le provisioner `k8s.io/minikube-hostpath`
+
+**Étape 2 : Créer un PVC avec provisionnement dynamique**
+
+Créez `manifests/pvc-dynamic.yaml` :
 
 ```yaml
 apiVersion: v1
-kind: Pod
+kind: PersistentVolumeClaim
 metadata:
-  name: pod-sidecar
-  labels:
-    app: web
+  name: dynamic-pvc
 spec:
-  containers:
-  # Conteneur principal : nginx
-  - name: nginx
-    image: nginx:alpine
-    ports:
-    - containerPort: 80
-    volumeMounts:
-    - name: shared-logs
-      mountPath: /var/log/nginx
-  
-  # Conteneur sidecar : lecteur de logs
-  - name: log-reader
-    image: busybox
-    command: ['sh', '-c', 'tail -f /logs/access.log']
-    volumeMounts:
-    - name: shared-logs
-      mountPath: /logs
-  
-  # Volume partagé entre les conteneurs
-  volumes:
-  - name: shared-logs
-    emptyDir: {}
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard  # Utilise la StorageClass par défaut
+  resources:
+    requests:
+      storage: 1Gi
 ```
 
-**Explications importantes :**
-
-**volumeMounts :**
-- Le conteneur nginx écrit ses logs dans `/var/log/nginx`
-- Le conteneur log-reader lit ces logs depuis `/logs`
-- C'est le même volume physique, juste monté à des endroits différents
-
-**emptyDir :**
-- Volume temporaire créé avec le Pod
-- Partagé entre tous les conteneurs
-- Supprimé quand le Pod est supprimé
-
-**Étape 2 : Déployer et observer**
+**Note :** Pas besoin de spécifier `storageClassName` si vous voulez utiliser la classe par défaut.
 
 ```bash
-# Déployer le Pod
-kubectl apply -f manifests/pod-multi-containers.yaml
+# Créer le PVC
+kubectl apply -f manifests/pvc-dynamic.yaml
 
-# Vérifier : vous devriez voir 2/2 dans READY
-kubectl get pod pod-sidecar
+# Observer la création automatique du PV
+kubectl get pvc
+kubectl get pv
+
+# Un PV a été créé automatiquement !
 ```
 
-**Sortie attendue :**
-```
-NAME          READY   STATUS    RESTARTS   AGE
-pod-sidecar   2/2     Running   0          15s
-```
+**Étape 3 : Utiliser le PVC dans un Deployment**
 
-Le `2/2` signifie : 2 conteneurs prêts sur 2 total.
+Créez `manifests/deployment-with-storage.yaml` :
 
-**Étape 3 : Consulter les logs de chaque conteneur**
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+      - name: mysql
+        image: mysql:8.0
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: "password"
+        ports:
+        - containerPort: 3306
+        volumeMounts:
+        - name: mysql-data
+          mountPath: /var/lib/mysql
+      volumes:
+      - name: mysql-data
+        persistentVolumeClaim:
+          claimName: dynamic-pvc
+```
 
 ```bash
-# Logs du conteneur nginx
-kubectl logs pod-sidecar -c nginx
+kubectl apply -f manifests/deployment-with-storage.yaml
 
-# Logs du conteneur log-reader
-kubectl logs pod-sidecar -c log-reader
+# Attendre que MySQL soit prêt
+kubectl wait --for=condition=Ready pod -l app=mysql --timeout=120s
+
+# Vérifier les logs
+kubectl logs -l app=mysql
 ```
 
-**Important :** Avec plusieurs conteneurs, vous devez spécifier avec `-c` quel conteneur vous voulez observer.
-
-**Étape 4 : Générer du trafic pour voir les logs**
+**Étape 4 : Tester la persistance des données**
 
 ```bash
-# Générer des requêtes HTTP vers nginx
-kubectl run test --image=busybox --rm -it --restart=Never -- sh -c "while true; do wget -qO- pod-sidecar; sleep 2; done"
+# Se connecter à MySQL et créer une base de données
+kubectl exec -it $(kubectl get pod -l app=mysql -o jsonpath='{.items[0].metadata.name}') -- mysql -uroot -ppassword
 
-# Dans un autre terminal, observer les logs
-kubectl logs pod-sidecar -c log-reader -f
+# Dans le shell MySQL :
+# CREATE DATABASE testdb;
+# USE testdb;
+# CREATE TABLE users (id INT, name VARCHAR(50));
+# INSERT INTO users VALUES (1, 'Alice');
+# SELECT * FROM users;
+# EXIT;
+
+# Supprimer le Pod
+kubectl delete pod -l app=mysql
+
+# Attendre que le Deployment recrée le Pod
+kubectl wait --for=condition=Ready pod -l app=mysql --timeout=60s
+
+# Se reconnecter et vérifier que les données sont là
+kubectl exec -it $(kubectl get pod -l app=mysql -o jsonpath='{.items[0].metadata.name}') -- mysql -uroot -ppassword -e "SELECT * FROM testdb.users;"
+
+# Les données sont conservées !
 ```
 
-Vous verrez les logs d'accès s'afficher en temps réel.
-
-**Étape 5 : Explorer le Pod**
+**Étape 5 : Examiner où sont stockées les données**
 
 ```bash
-# Entrer dans le conteneur nginx
-kubectl exec -it pod-sidecar -c nginx -- sh
+# Trouver le chemin du volume sur le nœud Minikube
+kubectl get pv -o yaml | grep "path:"
 
-# Dans le shell du conteneur :
-ls /var/log/nginx/
-cat /var/log/nginx/access.log
+# SSH dans Minikube pour voir les fichiers
+minikube ssh
+sudo ls -la /tmp/hostpath-provisioner/default/dynamic-pvc
 exit
 ```
 
-### Questions de compréhension
-1. Que se passe-t-il si un des deux conteneurs crash ?
-2. Les deux conteneurs ont-ils la même adresse IP ?
-3. Pourquoi utiliser un volume emptyDir plutôt que d'autres types ?
-
-**Réponses :**
-1. Le Pod passe en état "Not Ready" jusqu'à ce que tous les conteneurs soient OK
-2. Oui, ils partagent la même IP de Pod
-3. emptyDir est simple et suffisant pour du partage temporaire entre conteneurs
-
 ---
 
-## Exercice 3 - Labels et sélecteurs
+## Exercice 5 - Application complète avec volumes
 
 ### Objectif
-Maîtriser l'organisation des ressources avec les labels et les sélecteurs.
+Déployer WordPress avec MySQL, chacun ayant son propre stockage persistant.
 
 ### Contexte
-Dans un cluster réel, vous aurez des dizaines ou centaines de Pods. Les labels permettent de les organiser et de les filtrer efficacement.
-
-### Qu'est-ce qu'un label ?
-- Une paire clé-valeur attachée à une ressource
-- Exemples : `app=nginx`, `env=production`, `version=v1.2`
-- Utilisé pour filtrer, grouper, et sélectionner des ressources
+Architecture classique à deux tiers :
+- MySQL : base de données avec stockage persistant
+- WordPress : application web utilisant MySQL
 
 ### Instructions détaillées
 
-**Étape 1 : Créer plusieurs Pods avec différents labels**
+**Étape 1 : Créer les PVCs**
 
-Créez `manifests/pods-with-labels.yaml` :
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: frontend-prod
-  labels:
-    app: frontend
-    env: production
-    tier: web
-spec:
-  containers:
-  - name: nginx
-    image: nginx:alpine
----
-apiVersion: v1
-kind: Pod
-metadata:
-  name: frontend-dev
-  labels:
-    app: frontend
-    env: development
-    tier: web
-spec:
-  containers:
-  - name: nginx
-    image: nginx:alpine
----
-apiVersion: v1
-kind: Pod
-metadata:
-  name: backend-prod
-  labels:
-    app: backend
-    env: production
-    tier: api
-spec:
-  containers:
-  - name: httpd
-    image: httpd:alpine
-```
-
-**Remarque :** Le `---` sépare plusieurs ressources dans le même fichier.
-
-**Étape 2 : Déployer et lister**
-
-```bash
-# Déployer tous les Pods
-kubectl apply -f manifests/pods-with-labels.yaml
-
-# Lister tous les Pods avec leurs labels
-kubectl get pods --show-labels
-```
-
-**Étape 3 : Filtrer avec des sélecteurs**
-
-```bash
-# Tous les Pods de production
-kubectl get pods -l env=production
-
-# Tous les Pods frontend
-kubectl get pods -l app=frontend
-
-# Pods frontend ET production
-kubectl get pods -l app=frontend,env=production
-
-# Pods qui ne sont PAS en production
-kubectl get pods -l 'env!=production'
-
-# Pods dont l'env est production OU development
-kubectl get pods -l 'env in (production,development)'
-```
-
-**Étape 4 : Ajouter/Modifier des labels**
-
-```bash
-# Ajouter un label à un Pod existant
-kubectl label pod frontend-dev version=v1.0
-
-# Modifier un label existant (--overwrite obligatoire)
-kubectl label pod frontend-dev version=v1.1 --overwrite
-
-# Supprimer un label
-kubectl label pod frontend-dev version-
-
-# Vérifier
-kubectl get pod frontend-dev --show-labels
-```
-
-**Étape 5 : Utiliser les labels pour des actions groupées**
-
-```bash
-# Supprimer tous les Pods de développement
-kubectl delete pods -l env=development
-
-# Attention : cette commande supprime TOUS les Pods avec ce label !
-```
-
-### Bonnes pratiques pour les labels
-
-**Labels recommandés :**
-- `app` : Nom de l'application (frontend, backend, database)
-- `env` : Environnement (dev, staging, prod)
-- `tier` : Couche applicative (web, api, database)
-- `version` : Version de l'application (v1.0, v2.1)
-- `owner` : Équipe propriétaire (team-platform, team-data)
-
-**Exemple complet :**
-```yaml
-labels:
-  app: ecommerce
-  component: payment-service
-  env: production
-  version: v2.1.3
-  tier: api
-  team: payments
-```
-
-### Questions de compréhension
-1. Quelle est la différence entre un label et une annotation ?
-2. Peut-on avoir plusieurs Pods avec exactement les mêmes labels ?
-3. Comment lister tous les labels uniques utilisés dans le cluster ?
-
-**Réponses :**
-1. Les labels sont pour filtrer/sélectionner, les annotations pour stocker des métadonnées (non utilisées pour la sélection)
-2. Oui, c'est même très courant (réplicas d'une même application)
-3. `kubectl get pods --show-labels | awk '{print $NF}' | tr ',' '\n' | sort -u`
-
----
-
-## Exercice bonus - Debugging d'un Pod
-
-### Objectif
-Apprendre à diagnostiquer les problèmes courants.
-
-### Scénarios de debugging
-
-**Scénario 1 : Pod en CrashLoopBackOff**
-
-Créez un Pod qui crash :
+Créez `manifests/wordpress-pvcs.yaml` :
 
 ```yaml
 apiVersion: v1
-kind: Pod
+kind: PersistentVolumeClaim
 metadata:
-  name: crasher
+  name: mysql-pvc
 spec:
-  containers:
-  - name: bad-container
-    image: busybox
-    command: ['sh', '-c', 'exit 1']
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wordpress-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
 ```
 
-**Diagnostic :**
 ```bash
-# Observer le statut
-kubectl get pod crasher
-
-# Voir les événements
-kubectl describe pod crasher
-
-# Voir les logs (même si le conteneur a crashé)
-kubectl logs crasher
-kubectl logs crasher --previous  # Logs du conteneur précédent
+kubectl apply -f manifests/wordpress-pvcs.yaml
+kubectl get pvc
 ```
 
-**Scénario 2 : Image introuvable**
+**Étape 2 : Déployer MySQL**
+
+Créez `manifests/mysql-deployment.yaml` :
 
 ```yaml
 apiVersion: v1
-kind: Pod
+kind: Secret
 metadata:
-  name: bad-image
-spec:
-  containers:
-  - name: container
-    image: nginx:version-inexistante
-```
-
-**Diagnostic :**
-```bash
-kubectl get pod bad-image
-# STATUS: ImagePullBackOff ou ErrImagePull
-
-kubectl describe pod bad-image
-# Cherchez la section Events pour voir l'erreur exacte
-```
-
-**Scénario 3 : Pod lent à démarrer**
-
-Parfois un Pod met du temps à être "Ready". C'est normal si :
-- L'image est volumineuse à télécharger
-- L'application met du temps à démarrer
-- Des health checks sont configurés
-
-```bash
-# Suivre l'évolution en temps réel
-kubectl get pod mon-pod --watch
-
-# Voir exactement où on en est
-kubectl describe pod mon-pod
-```
-
+  name: mysql-secret
+type: Opaque
+stringData:
+  password: "wordpress123"
 ---
-
-## Commandes de référence rapide
-
-### Création et suppression
-```bash
-kubectl apply -f fichier.yaml              # Créer ou mettre à jour
-kubectl delete -f fichier.yaml             # Supprimer depuis fichier
-kubectl delete pod nom-pod                 # Supprimer par nom
-kubectl delete pods --all                  # Supprimer tous les Pods
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+      - name: mysql
+        image: mysql:8.0
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: password
+        - name: MYSQL_DATABASE
+          value: wordpress
+        ports:
+        - containerPort: 3306
+        volumeMounts:
+        - name: mysql-data
+          mountPath: /var/lib/mysql
+      volumes:
+      - name: mysql-data
+        persistentVolumeClaim:
+          claimName: mysql-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+spec:
+  selector:
+    app: mysql
+  ports:
+  - port: 3306
+  clusterIP: None  # Headless service
 ```
 
-### Consultation
 ```bash
-kubectl get pods                           # Lister les Pods
-kubectl get pods -o wide                   # Plus d'informations
-kubectl get pod nom-pod -o yaml            # Voir le YAML complet
-kubectl describe pod nom-pod               # Description détaillée
-kubectl get pods --show-labels             # Afficher les labels
+kubectl apply -f manifests/mysql-deployment.yaml
+
+# Attendre que MySQL soit prêt
+kubectl wait --for=condition=Ready pod -l app=mysql --timeout=120s
 ```
 
-### Logs et debugging
-```bash
-kubectl logs nom-pod                       # Logs du Pod
-kubectl logs nom-pod -c nom-conteneur      # Logs d'un conteneur spécifique
-kubectl logs nom-pod -f                    # Suivre les logs (tail -f)
-kubectl logs nom-pod --previous            # Logs du conteneur précédent
-kubectl exec -it nom-pod -- sh             # Shell interactif
+**Étape 3 : Déployer WordPress**
+
+Créez `manifests/wordpress-deployment.yaml` :
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wordpress
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wordpress
+  template:
+    metadata:
+      labels:
+        app: wordpress
+    spec:
+      containers:
+      - name: wordpress
+        image: wordpress:6.4-apache
+        env:
+        - name: WORDPRESS_DB_HOST
+          value: mysql
+        - name: WORDPRESS_DB_NAME
+          value: wordpress
+        - name: WORDPRESS_DB_USER
+          value: root
+        - name: WORDPRESS_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: password
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: wordpress-data
+          mountPath: /var/www/html
+      volumes:
+      - name: wordpress-data
+        persistentVolumeClaim:
+          claimName: wordpress-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wordpress
+spec:
+  type: NodePort
+  selector:
+    app: wordpress
+  ports:
+  - port: 80
+    targetPort: 80
 ```
 
-### Filtrage
 ```bash
-kubectl get pods -l app=nginx              # Filtrer par label
-kubectl get pods --field-selector status.phase=Running  # Par champ
-kubectl get pods --all-namespaces          # Tous les namespaces
+kubectl apply -f manifests/wordpress-deployment.yaml
+
+# Attendre que WordPress soit prêt
+kubectl wait --for=condition=Ready pod -l app=wordpress --timeout=120s
+```
+
+**Étape 4 : Accéder à WordPress**
+
+```bash
+# Obtenir l'URL de WordPress
+minikube service wordpress --url
+
+# Ouvrir l'URL dans votre navigateur
+# Vous devriez voir la page d'installation de WordPress
+```
+
+**Étape 5 : Tester la persistance**
+
+```bash
+# Installer WordPress via l'interface web
+# Créer quelques articles
+
+# Supprimer les Pods
+kubectl delete pod -l app=wordpress
+kubectl delete pod -l app=mysql
+
+# Attendre que les Deployments recréent les Pods
+kubectl wait --for=condition=Ready pod -l app=wordpress --timeout=60s
+
+# Rouvrir WordPress
+minikube service wordpress --url
+
+# Vos articles sont toujours là !
+```
+
+**Étape 6 : Observer les volumes**
+
+```bash
+# Voir tous les PVs et PVCs
+kubectl get pv,pvc
+
+# Voir l'utilisation du stockage
+kubectl describe pvc mysql-pvc
+kubectl describe pvc wordpress-pvc
 ```
 
 ---
 
 ## Points clés à retenir
 
-1. **Un Pod = unité de déploiement** : C'est la plus petite ressource déployable
-2. **Les conteneurs d'un Pod partagent** : IP, volumes, et s'exécutent sur le même nœud
-3. **Les labels organisent** : Utilisez-les systématiquement pour filtrer et gérer
-4. **YAML est déclaratif** : Vous décrivez l'état souhaité, Kubernetes le réalise
-5. **kubectl est votre ami** : `describe` et `logs` sont essentiels pour débugger
+1. **emptyDir** : Volume temporaire, parfait pour le cache ou le partage entre conteneurs d'un Pod
+2. **hostPath** : Accès au système de fichiers du nœud, utile pour Minikube mais risqué en production
+3. **PV/PVC** : Séparation entre provisionnement (admin) et utilisation (dev)
+4. **StorageClass** : Provisionnement dynamique automatique des volumes
+5. **Persistance** : Les données survivent aux redémarrages de Pods quand elles sont dans un PV
+
+### Hiérarchie de persistance
+
+```
+emptyDir          → Durée de vie du Pod
+hostPath          → Durée de vie du nœud (risqué)
+PV/PVC            → Durée de vie indépendante du Pod
+```
+
+---
+
+## Commandes de référence rapide
+
+### Gestion des volumes
+
+```bash
+# PersistentVolumes
+kubectl get pv
+kubectl describe pv <nom-pv>
+kubectl delete pv <nom-pv>
+
+# PersistentVolumeClaims
+kubectl get pvc
+kubectl describe pvc <nom-pvc>
+kubectl delete pvc <nom-pvc>
+
+# StorageClass
+kubectl get storageclass
+kubectl describe storageclass standard
+```
+
+### Debugging
+
+```bash
+# Voir quel PVC est utilisé par un Pod
+kubectl get pod <nom-pod> -o yaml | grep -A 5 volumes
+
+# Voir les événements liés aux volumes
+kubectl get events --sort-by='.lastTimestamp' | grep -i volume
+
+# Vérifier l'état d'un PVC
+kubectl describe pvc <nom-pvc>
+```
+
+### Minikube spécifique
+
+```bash
+# SSH dans Minikube pour voir les volumes
+minikube ssh
+
+# Voir les volumes hostpath
+minikube ssh "sudo ls -la /tmp/hostpath-provisioner"
+```
+
+---
+
+## Nettoyage complet
+
+```bash
+# Supprimer l'exercice WordPress
+kubectl delete -f manifests/wordpress-deployment.yaml
+kubectl delete -f manifests/mysql-deployment.yaml
+kubectl delete -f manifests/wordpress-pvcs.yaml
+kubectl delete secret mysql-secret
+
+# Supprimer les autres exercices
+kubectl delete -f manifests/deployment-with-storage.yaml
+kubectl delete -f manifests/pvc-dynamic.yaml
+kubectl delete -f manifests/emptydir-pod.yaml
+kubectl delete -f manifests/hostpath-pod.yaml
+
+# Nettoyer les volumes manuels
+kubectl delete pvc local-pvc
+kubectl delete pv local-pv
+
+# Vérifier qu'il ne reste rien
+kubectl get pv,pvc,pods
+```
+
+---
+
+## Dépannage
+
+### PVC reste en Pending
+
+**Symptôme :** `kubectl get pvc` affiche STATUS "Pending"
+
+**Causes possibles :**
+1. Aucun PV disponible correspondant
+2. StorageClass inexistante ou mal configurée
+3. Pas assez d'espace sur le nœud
+
+**Solutions :**
+```bash
+# Vérifier les événements
+kubectl describe pvc <nom-pvc>
+
+# Vérifier les PV disponibles
+kubectl get pv
+
+# Vérifier la StorageClass
+kubectl get storageclass
+```
+
+### Pod ne peut pas monter le volume
+
+**Symptôme :** Pod en "ContainerCreating" avec erreur de montage
+
+**Solutions :**
+```bash
+# Voir les événements du Pod
+kubectl describe pod <nom-pod>
+
+# Vérifier que le PVC est bien Bound
+kubectl get pvc
+
+# Pour hostPath, vérifier que le chemin existe
+minikube ssh "sudo ls -la /mnt/data"
+```
+
+### Données perdues après redémarrage
+
+**Vérifications :**
+```bash
+# Le PVC existe-t-il toujours ?
+kubectl get pvc
+
+# Le PVC est-il bien utilisé par le Pod ?
+kubectl describe pod <nom-pod> | grep -A 5 Volumes
+
+# Pour hostPath, les données sont-elles sur le nœud ?
+minikube ssh "sudo ls -la /mnt/pv-data"
+```
 
 ---
 
 ## Pour aller plus loin
 
 ### Ressources recommandées
-- Documentation officielle des Pods : https://kubernetes.io/docs/concepts/workloads/pods/
-- Interactive tutorial : https://kubernetes.io/docs/tutorials/kubernetes-basics/
+- Documentation officielle des volumes : https://kubernetes.io/docs/concepts/storage/volumes/
+- PersistentVolumes : https://kubernetes.io/docs/concepts/storage/persistent-volumes/
+- StorageClasses : https://kubernetes.io/docs/concepts/storage/storage-classes/
 
 ### Prochaine étape
-Dans le TP02, vous découvrirez les **Deployments**, qui gèrent automatiquement plusieurs répliques de Pods et leurs mises à jour.
+Dans le TP06, vous découvrirez **Ingress**, qui permet d'exposer vos applications HTTP/HTTPS avec un point d'entrée unique.
+
