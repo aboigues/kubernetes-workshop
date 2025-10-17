@@ -267,7 +267,7 @@ Créez `manifests/nginx-with-configmap-volume.yaml` :
 ```yaml
 apiVersion: v1
 kind: Pod
-data:
+metadata:
   name: nginx-configured
 spec:
   containers:
